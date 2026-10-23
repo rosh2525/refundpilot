@@ -1,6 +1,6 @@
 """initial schema
 Revision ID: 143a49704b62
-Revises: 
+Revises:
 """
 from typing import Sequence, Union
 from alembic import op

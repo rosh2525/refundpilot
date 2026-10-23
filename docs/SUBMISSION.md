@@ -13,7 +13,7 @@ A customer request, a merchant policy, and a payment record often live in differ
 RefundPilot links a customer message to its original payment. AI proposes a refund, denial, or further review with exact source quotations. Independent code checks USD amounts, the refund window, prior refunds, and reserved funds. The merchant approves a specific proposal; a durable worker executes that exact PayPal sandbox refund and reconciles its result.
 
 ## How we built it
-React and TypeScript provide the merchant interface. FastAPI, Pydantic, SQLAlchemy, Alembic, and PostgreSQL support validation, immutable proposals, atomic reservations, durable jobs, and audit history. Gemini returns structured recommendations. PayPal Orders v2 creates and captures test purchases; Payments v2 executes approved refunds and retrieves their status. Verified webhooks trigger reconciliation. Render hosts the container and database.
+React and TypeScript provide the merchant interface. FastAPI, Pydantic, SQLAlchemy, Alembic, and PostgreSQL support validation, immutable proposals, atomic reservations, durable jobs, and audit history. Gemini returns structured recommendations. PayPal Orders v2 creates and captures test purchases; Payments v2 executes approved refunds and retrieves their status. Verified webhooks trigger reconciliation. Render hosts the container; Neon provides the PostgreSQL database.
 
 ## What makes it different
 The recommendation is inspectable, approval is bound to exact financial parameters, and a lost network response cannot silently become a fresh refund. Pending and unknown outcomes stay visible and keep funds reserved. The product has a usable review interface rather than just a chat-to-API wrapper.
@@ -35,7 +35,7 @@ PayPal sandbox REST APIs, Gemini API, React, TypeScript, FastAPI, PostgreSQL, SQ
 
 ## Required links
 - Public source repository: https://github.com/rosh2525/refundpilot
-- Hosted working demo: [insert verified URL]
+- Hosted working demo: https://refundpilot.onrender.com
 - Public YouTube video under 3 minutes: [insert after recording]
 - License: MIT
 

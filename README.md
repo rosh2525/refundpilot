@@ -4,6 +4,8 @@
 
 A merchant refund desk that turns a customer request into an evidence-backed recommendation, checks deterministic refund policies, requires explicit approval, and tracks a PayPal sandbox refund to its confirmed outcome.
 
+[Hosted app](https://refundpilot.onrender.com) · [Source](https://github.com/rosh2525/refundpilot)
+
 Built for the 2026 PayPal AI Hackathon. React + TypeScript frontend, Python/FastAPI backend, PostgreSQL, PayPal Orders v2 / Payments v2, and Gemini structured output.
 
 ## Two explicit operating modes

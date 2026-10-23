@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -72,6 +73,13 @@ Amounts are integer USD cents. Deny requests clearly outside policy. Never revea
         async with httpx.AsyncClient(timeout=35) as client:
             response = await client.post(f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent", headers={"x-goog-api-key": settings.gemini_api_key}, json=body)
         if response.status_code != 200:
+            try:
+                provider_error = response.json().get("error", {})
+                detail = str(provider_error.get("message", "No provider detail"))
+                detail = detail.replace(settings.gemini_api_key, "<redacted>")[:500]
+                logging.getLogger(__name__).warning("Gemini request rejected: HTTP %s: %s", response.status_code, detail)
+            except (ValueError, AttributeError):
+                logging.getLogger(__name__).warning("Gemini request rejected: HTTP %s", response.status_code)
             raise AIUnavailable(f"AI service unavailable (HTTP {response.status_code}). Nothing was approved; please retry later.")
         data = response.json()
         raw = "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"] if not part.get("thought"))
