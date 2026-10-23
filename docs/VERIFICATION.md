@@ -12,14 +12,15 @@ Verified on 23 October 2026 against https://refundpilot.onrender.com.
 - Capture data persisted through subsequent Render deployments.
 - Gemini 3.5 Flash-Lite: actual API response, structured $5 refund recommendation, exact policy and customer quotations verified by server code.
 - Explicit approval: $5 PayPal sandbox refund completed; original payment shows $5 refunded and $15 available.
-- Actual signed PAYMENT.CAPTURE.COMPLETED notification accepted and recorded.
+- Actual signed PAYMENT.CAPTURE.COMPLETED and PAYMENT.CAPTURE.REFUNDED notifications accepted and recorded.
 - $16 request against $15 remaining denied; no executable approval offered.
+- An instruction-injection request for $5 within the remaining balance produced needs_review and no executable approval.
 - 36 automated tests; GitHub CI passes tests, Alembic migration/check, frontend build, and dependency audit.
 - Phone-width preview layout checked at 390px with no horizontal overflow.
 
 ## Still to complete before submission
 
-- Confirm actual signed refund notification and resend deduplication with PayPal dashboard.
+- Verify webhook resend deduplication using PayPal dashboard; initial signed capture and refund notifications already passed.
 - Test pending-operation recovery during a controlled restart against deployed PostgreSQL; automated tests cover simulated recovery.
 - Record broader model evaluation results using fixtures/evaluation_cases.json.
 - Record and publish the English demo video under three minutes.

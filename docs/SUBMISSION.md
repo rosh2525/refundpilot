@@ -22,7 +22,7 @@ The recommendation is inspectable, approval is bound to exact financial paramete
 Handling uncertain provider outcomes, avoiding concurrent over-refunds, invalidating stale approvals, and keeping AI evidence grounded in supplied text.
 
 ## Accomplishments and validation
-36 automated tests pass, and GitHub CI passes migration checks, the frontend build, and dependency auditing. The deployed Render app uses Neon PostgreSQL. A real PayPal sandbox $20 purchase was approved and captured, Gemini 3.5 Flash-Lite returned a structured $5 recommendation with verified source quotations, and the approved PayPal sandbox refund completed with $15 remaining. An actual signed capture webhook was verified. A request above the remaining balance was denied. See docs/VERIFICATION.md for completed checks and remaining acceptance work.
+36 automated tests pass, and GitHub CI passes migration checks, the frontend build, and dependency auditing. The deployed Render app uses Neon PostgreSQL. A real PayPal sandbox $20 purchase was approved and captured, Gemini 3.5 Flash-Lite returned a structured $5 recommendation with verified source quotations, and the approved PayPal sandbox refund completed with $15 remaining. Actual signed capture and refund webhooks were verified. A request above the remaining balance was denied, and instruction injection produced a non-executable needs-review recommendation. See docs/VERIFICATION.md for completed checks and remaining acceptance work.
 
 ## What is next
 A larger pilot with merchant feedback, additional currencies, controlled multi-merchant onboarding, and connected support systems. These are future work.
