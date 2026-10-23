@@ -22,7 +22,7 @@ The recommendation is inspectable, approval is bound to exact financial paramete
 Handling uncertain provider outcomes, avoiding concurrent over-refunds, invalidating stale approvals, and keeping AI evidence grounded in supplied text.
 
 ## Accomplishments and validation
-[Replace this section with observed verification results before submission. Include the passing test count, real sandbox purchase/capture/refund IDs in an appropriate private test record, deployed PostgreSQL smoke results, and actual model output. Do not claim preview fixtures demonstrate PayPal integration.]
+36 automated tests pass, and GitHub CI passes migration checks, the frontend build, and dependency auditing. The deployed Render app uses Neon PostgreSQL. A real PayPal sandbox $20 purchase was approved and captured, Gemini 3.5 Flash-Lite returned a structured $5 recommendation with verified source quotations, and the approved PayPal sandbox refund completed with $15 remaining. An actual signed capture webhook was verified. A request above the remaining balance was denied. See docs/VERIFICATION.md for completed checks and remaining acceptance work.
 
 ## What is next
 A larger pilot with merchant feedback, additional currencies, controlled multi-merchant onboarding, and connected support systems. These are future work.
@@ -31,7 +31,7 @@ A larger pilot with merchant feedback, additional currencies, controlled multi-m
 PayPal sandbox REST APIs, Gemini API, React, TypeScript, FastAPI, PostgreSQL, SQLAlchemy, Alembic, Render, and AI-assisted development tooling. The Northstar merchant, messages, and illustrations are original fictional demo material. Disclose the actual model and development tools used at submission.
 
 ## Testing instructions
-[Insert hosted URL, dedicated merchant login, separate sandbox buyer access, clear checkout/refund steps, and limitations. Do not publish server secrets.]
+Open https://refundpilot.onrender.com. Dedicated judge login and sandbox buyer credentials must be supplied privately in Devpost testing instructions before submission; they are intentionally absent from the public repository. Follow docs/SMOKE_TEST.md for checkout, capture, review, and refund steps. The free service may need time to wake after inactivity. Only sandbox test funds are supported.
 
 ## Required links
 - Public source repository: https://github.com/rosh2525/refundpilot
