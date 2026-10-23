@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+*.db-*
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+artifacts/
+
+*.tsbuildinfo
