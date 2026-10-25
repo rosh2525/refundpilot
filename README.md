@@ -51,7 +51,7 @@ Open [localhost:8000](http://127.0.0.1:8000) and use `refundpilot-local` for the
 
 ## Validation
 
-122 backend tests and 4 frontend checks for CSV security and payment balances pass. CI checks tests, migrations, the frontend build, and dependency vulnerabilities. Hosted checks include completed sandbox refunds, verified payment notifications, image upload and an inconclusive image review, record exports, and all four safety simulations. See [testing notes](docs/TESTING.md) for coverage and remaining integration checks.
+134 backend tests and 4 frontend checks for CSV security and payment balances pass. CI checks tests, migrations, the frontend build, and dependency vulnerabilities. Hosted checks include completed sandbox refunds, verified payment notifications, image upload and an inconclusive image review, record exports, and all four safety simulations. See [testing notes](docs/TESTING.md) for coverage and remaining integration checks.
 
 ```sh
 pytest -q

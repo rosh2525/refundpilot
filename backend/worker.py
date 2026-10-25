@@ -170,7 +170,7 @@ async def process_webhook(event_id):
                 elif capture_job.state != "running":
                     capture_job.state, capture_job.run_after = "pending", time.time()
         event.processed = True
-        audit(session, "verified_webhook_received", event_id=event.event_id, event_type=event.event_type)
+        audit(session, "verified_webhook_received", environment="sandbox", event_id=event.event_id, event_type=event.event_type)
 
 
 async def run_once():

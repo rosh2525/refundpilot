@@ -18,7 +18,7 @@ flowchart LR
 
 ## Data records
 
-`payments` stores app-owned order and capture IDs, source/environment, cents, reservations, and a monotonic version. `cases` stores customer text and the requested amount. `proposals` stores immutable analysis, exact citations, policy hash, payment version, and fingerprint. `refunds` stores approval-linked operation identity, fixed API payload, request UUID, provider ID, result, and reservation state. `jobs` stores due time, attempts, claim token, and lease expiry. `webhooks` stores only verified events, uniquely keyed by provider event ID. `audit` records business events. `quotas` bounds daily AI requests before calling the model.
+`payments` stores app-owned order and capture IDs, source/environment, cents, reservations, and a monotonic version. `cases` stores customer text and the requested amount. `proposals` stores immutable analysis, exact citations, policy hash, payment version, and fingerprint. `refunds` stores approval-linked operation identity, fixed API payload, request UUID, provider ID, result, and reservation state. `jobs` stores due time, attempts, claim token, and lease expiry. `webhooks` stores only verified events, uniquely keyed by provider event ID. `audit` records business events with a preview/sandbox environment. Dashboard and packet queries filter that environment before limiting results. The migration classifies historical rows using linked payments, operations, and verified webhook records; unclassifiable rows remain stored as `legacy` and are excluded from current workspaces. `quotas` bounds daily AI requests before calling the model.
 
 ## API
 
@@ -38,7 +38,7 @@ flowchart LR
 
 An HTTP-only, signed 12-hour cookie identifies the single merchant. CSRF token/header matching and exact Origin checks protect mutations. HTTPS makes the cookies Secure. React escapes all customer/model strings. APIs do not accept arbitrary capture IDs or client-selected payment amounts. Sandbox API origin is hardcoded; there is no live-mode option.
 
-The AI receives the merchant policy, selected payment facts, customer text, and an optional normalized image. It never receives API credentials or a financial write tool. A schema checks types, an exact-quotation check grounds citations, and independent deterministic policy controls gate approval.
+The AI receives the merchant policy, selected payment facts, customer text, and an optional normalized image. It never receives API credentials or a financial write tool. A schema checks types, an exact-quotation check grounds citations, and independent deterministic policy controls gate approval. Model explanations containing numerical or monetary assertions use a qualitative decision template. Requested, recommended, and currently available cents are supplied separately from application records and formatted as USD. The same presentation applies to older stored proposals without rewriting their history.
 
 ## State and recovery
 
@@ -68,6 +68,7 @@ Additional authenticated APIs:
 
 - `POST /api/cases/{id}/evidence`: bounded JSON `{image_base64, media_type}`; returns metadata and invalidates old proposals.
 - `GET /api/cases/{id}/evidence`: authenticated normalized image response, no-store.
+- `DELETE /api/cases/{id}/evidence`: removes an unapproved attachment, retains its hash in the audit trail, and requires a replacement plus fresh review.
 - `GET /api/cases/{id}/packet`: private review draft, without image bytes or credentials.
 - `GET /api/lab`: scenario descriptions and explicit isolation limitations.
 - `POST /api/lab/run`: `{scenario}`; results of disposable approval simulations.

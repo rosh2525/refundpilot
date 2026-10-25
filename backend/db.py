@@ -121,6 +121,7 @@ class Audit(Base):
     __tablename__ = "audit"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     action: Mapped[str] = mapped_column(String(100))
+    environment: Mapped[str] = mapped_column(String(20), default=lambda: settings.mode, server_default="legacy", index=True)
     case_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[float] = mapped_column(Float, default=time.time)
@@ -130,8 +131,19 @@ class Quota(Base):
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     used: Mapped[int] = mapped_column(Integer, default=0)
 
-def audit(session, action, case_id=None, **details):
-    session.add(Audit(action=action, case_id=case_id, details=details))
+def audit(session, action, case_id=None, *, environment=None, **details):
+    payment_id = details.get("payment_id")
+    if not payment_id and case_id:
+        case = session.get(Case, case_id)
+        payment_id = case.payment_id if case else None
+    if not payment_id and details.get("operation_id"):
+        operation = session.get(Refund, details["operation_id"])
+        payment_id = operation.payment_id if operation else None
+    if environment is None and payment_id:
+        payment = session.get(Payment, payment_id)
+        if payment:
+            environment = {"fixture": "preview", "paypal_sandbox": "sandbox"}.get(payment.source, "legacy")
+    session.add(Audit(action=action, case_id=case_id, environment=environment or settings.mode, details=details))
 
 def as_dict(obj):
     return {column.name: getattr(obj, column.name) for column in obj.__table__.columns}

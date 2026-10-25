@@ -23,6 +23,7 @@ from .policy import blockers, fingerprint
 from .approval import approve_proposal
 from .paypal import paypal, PayPalError, cents
 from .ai import analyze, AIUnavailable
+from .review import proposal_view
 from .worker import worker_loop
 from .evidence import normalize_image, EvidenceError, MAX_BASE64_LENGTH
 from .lab import lab_config, run_scenario, Scenario
@@ -131,7 +132,8 @@ def payment_or_404(session, payment_id):
 def case_view(session, case):
     result = as_dict(case)
     proposal = session.scalar(select(Proposal).where(Proposal.case_id == case.id).order_by(Proposal.created_at.desc()).limit(1))
-    result["proposal"] = as_dict(proposal) if proposal else None
+    payment = session.get(Payment, case.payment_id)
+    result["proposal"] = proposal_view(proposal, case, payment) if proposal else None
     operation = session.scalar(select(Refund).join(Proposal).where(Proposal.case_id == case.id))
     result["refund"] = as_dict(operation) if operation else None
     evidence = session.scalar(select(Evidence).where(Evidence.case_id == case.id))
@@ -246,7 +248,7 @@ def dashboard(_: Auth):
         ids = [payment.id for payment in payments]
         cases = session.scalars(select(Case).where(Case.payment_id.in_(ids)).order_by(Case.created_at.desc())).all() if ids else []
         refunds = session.scalars(select(Refund).where(Refund.payment_id.in_(ids)).order_by(Refund.created_at.desc())).all() if ids else []
-        events = session.scalars(select(Audit).order_by(Audit.created_at.desc()).limit(40)).all()
+        events = session.scalars(select(Audit).where(Audit.environment == settings.mode).order_by(Audit.created_at.desc()).limit(40)).all()
         return {"payments": [as_dict(payment) for payment in payments], "cases": [case_view(session, case) for case in cases],
                 "refunds": [as_dict(op) for op in refunds], "audit": [as_dict(event) for event in events]}
 
@@ -389,7 +391,7 @@ def review_packet(case_id: str, _: Auth):
         refunds = session.scalars(select(Refund).join(Proposal).where(Proposal.case_id == case_id)).all()
         operation_ids = {op.id for op in refunds}
         provider_ids = {op.paypal_refund_id for op in refunds if op.paypal_refund_id}
-        events = [event for event in session.scalars(select(Audit).order_by(Audit.created_at)).all()
+        events = [event for event in session.scalars(select(Audit).where(Audit.environment == settings.mode).order_by(Audit.created_at)).all()
                   if event.case_id == case_id or event.details.get("operation_id") in operation_ids]
         webhooks = []
         for event in session.scalars(select(Webhook)).all():
@@ -402,7 +404,7 @@ def review_packet(case_id: str, _: Auth):
                 "limitations":["Customer statements and photos are unverified claims.","Local audit records do not independently prove delivery, authenticity, or fulfillment.","No bank details, API credentials, session cookies, or image bytes are included."],
                 "payment":{key:getattr(payment,key) for key in ("id","order_id","capture_id","currency","amount_cents","refunded_cents","reserved_cents","status","captured_at")},
                 "case":as_dict(case), "current_policy":POLICY, "evidence":evidence_metadata(image) if image else None,
-                "return_economics":return_economics(case), "proposals":[as_dict(p) for p in proposals],
+                "return_economics":return_economics(case), "proposals":[proposal_view(p, case, payment) for p in proposals],
                 "refunds":[as_dict(op) for op in refunds], "audit":[as_dict(event) for event in events], "verified_refund_notifications":webhooks}
 
 
