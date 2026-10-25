@@ -38,7 +38,7 @@ flowchart LR
 
 An HTTP-only, signed 12-hour cookie identifies the single merchant. CSRF token/header matching and exact Origin checks protect mutations. HTTPS makes the cookies Secure. React escapes all customer/model strings. APIs do not accept arbitrary capture IDs or client-selected payment amounts. Sandbox API origin is hardcoded; there is no live-mode option.
 
-The AI receives only synthetic policy, selected payment facts, and customer text. It never receives API credentials or a financial write tool. A schema checks types, an exact-quotation check grounds citations, and independent deterministic policy controls gate approval.
+The AI receives the merchant policy, selected payment facts, customer text, and an optional normalized image. It never receives API credentials or a financial write tool. A schema checks types, an exact-quotation check grounds citations, and independent deterministic policy controls gate approval.
 
 ## State and recovery
 
@@ -62,7 +62,7 @@ If an operation remains unknown: inspect the PayPal sandbox merchant dashboard a
 
 Gemini receives the normalized image as inlineData alongside the supplied policy, customer text and payment document. Visual observations cannot authenticate a photo or item. Uncertain, contradictory, absent, or no-visible-damage assessments block a refund recommendation. Return-cost arithmetic uses optional merchant estimates in integer cents and has no authority over payment eligibility.
 
-`backend/approval.py` contains the transaction shared by the merchant approval endpoint and the Safety lab. Lab runs create a fresh temporary SQLite database, use its own Session and synthetic records, exercise concurrent approvals, and dispose all state. They never rebind merchant sessions, mutate global policy, call Gemini/PayPal, or execute queued jobs. The lab therefore demonstrates the application invariant, not provider idempotency or PostgreSQL integration. Existing payment tests and deployed sandbox verification remain separate.
+`backend/approval.py` contains the transaction shared by the merchant approval endpoint and the Safety lab. Lab runs create a fresh temporary SQLite database, use its own Session and synthetic records, exercise concurrent approvals, and dispose all state. They never rebind merchant sessions, mutate global policy, call Gemini/PayPal, or execute queued jobs. The lab therefore demonstrates the application invariant, not provider idempotency or PostgreSQL integration. Payment integration tests are documented separately in [Testing](TESTING.md).
 
 Additional authenticated APIs:
 

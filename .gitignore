@@ -13,3 +13,6 @@ frontend/dist/
 artifacts/
 
 *.tsbuildinfo
+
+# Local project notes
+/private-notes/
