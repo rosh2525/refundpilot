@@ -42,6 +42,8 @@ Run `alembic upgrade head` before starting sandbox mode. Preview fixtures are ex
 
 The multi-stage [Dockerfile](../Dockerfile) builds the frontend and serves it from FastAPI. The startup command runs migrations, then starts one Uvicorn process and its asynchronous database-backed worker.
 
+The Docker entry point uses `python -m backend.server` to configure proxy trust. On Render (`RENDER=true`), it trusts Render's internal `10.0.0.0/8` ingress and the published Cloudflare proxy ranges, then resolves the client from the right of `X-Forwarded-For`. Other deployments default to loopback proxies only. `TRUSTED_PROXY_CIDRS` can override this list with the actual proxy IPs/CIDRs for your infrastructure; wildcard and `/0` trust are rejected. Keep the Cloudflare list in `backend/server.py` current using their [IPv4](https://www.cloudflare.com/ips-v4) and [IPv6](https://www.cloudflare.com/ips-v6) lists. Do not trust arbitrary forwarded headers or expose the server through an untrusted private proxy. This controls the client address used by the login rate limiter; broad `FORWARDED_ALLOW_IPS` hosting defaults are not used by this entry point.
+
 The [Render blueprint](../render.yaml) declares a free Docker web service. Use persistent PostgreSQL, such as Neon, and set the connection string with TLS enabled. Store environment secrets in the hosting dashboard. Render provides `RENDER_EXTERNAL_URL`; an explicit `APP_URL` overrides it. Set the health check to `/health`.
 
 Free Render services can sleep after inactivity. Records and queued jobs remain in PostgreSQL; processing resumes after the service wakes. Keep full setup instructions available for reviewers. Do not run multiple Uvicorn workers without moving the in-memory login limiter to shared storage.
@@ -55,3 +57,5 @@ Free Render services can sleep after inactivity. Records and queued jobs remain 
 - AI calls use `AI_DAILY_LIMIT` as well as provider quotas.
 
 Images remain behind merchant authentication. Their bytes are excluded from dashboard JSON, CSV exports, and review packets. Images are sent to Gemini when analyzed. Once a case has an approved refund, its evidence cannot change.
+
+Before approval, merchants can replace or remove a saved photo. Either action invalidates prior proposals and records the image hash in the audit trail. Removal deletes the stored image bytes and requires a replacement photo plus fresh analysis before the case can be approved; it cannot bypass a blocked visual assessment.

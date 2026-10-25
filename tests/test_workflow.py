@@ -3,7 +3,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from backend.main import app
 from backend.config import settings, POLICY_HASH
 from backend.db import Session, Payment, Refund, Job, Proposal
@@ -153,3 +153,61 @@ def test_webhook_simulations_do_not_bypass_signature_verification(client):
 def test_unknown_capture_cannot_be_injected(client):
     result = client.post("/api/cases", json={"payment_id": "foreign-payment", "statement": "Please refund this other merchant's order.", "requested_cents": 500})
     assert result.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_missing_reconciliation_job_is_restored_without_new_refund(client, payment):
+    operation, _ = approved_refund(client, payment)
+    with Session.begin() as session:
+        session.execute(delete(Job).where(Job.reference_id == operation['id']))
+    path = f"/api/refunds/{operation['id']}/reconcile"
+    for _ in range(2):
+        response = client.post(path)
+        assert response.status_code == 200
+        assert response.json()['request_id'] == operation['request_id']
+        assert response.json()['payload'] == operation['payload']
+    with Session() as session:
+        assert session.scalar(select(func.count()).select_from(Job).where(Job.reference_id == operation['id'])) == 1
+        assert session.scalar(select(func.count()).select_from(Refund)) == 1
+        assert session.get(Payment, payment['id']).reserved_cents == operation['amount_cents']
+    assert await run_once()
+    assert not await run_once()
+    with Session() as session:
+        assert session.get(Refund, operation['id']).status == 'completed'
+        assert session.get(Payment, payment['id']).refunded_cents == operation['amount_cents']
+
+
+def test_reconcile_preserves_running_lease(client, payment):
+    operation, _ = approved_refund(client, payment)
+    claim = claim_job()
+    with Session() as session:
+        before = session.get(Job, claim[0]).lease_until
+    assert client.post(f"/api/refunds/{operation['id']}/reconcile").status_code == 200
+    with Session() as session:
+        job = session.get(Job, claim[0])
+        assert job.state == 'running' and job.lease_token == claim[3] and job.lease_until == before
+
+
+def test_concurrent_reconciliation_restores_one_job(client, payment):
+    operation, _ = approved_refund(client, payment)
+    with Session.begin() as session:
+        session.execute(delete(Job).where(Job.reference_id == operation['id']))
+    def reconcile(_):
+        return client.post(f"/api/refunds/{operation['id']}/reconcile").status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(reconcile, range(2))) == [200, 200]
+    with Session() as session:
+        assert session.scalar(select(func.count()).select_from(Job).where(Job.reference_id == operation['id'])) == 1
+        assert session.get(Refund, operation['id']).request_id == operation['request_id']
+        assert session.get(Payment, payment['id']).reserved_cents == operation['amount_cents']
+
+
+@pytest.mark.asyncio
+async def test_terminal_refund_does_not_recreate_missing_job(client, payment):
+    operation, _ = approved_refund(client, payment)
+    await run_once()
+    with Session.begin() as session:
+        session.execute(delete(Job).where(Job.reference_id == operation['id']))
+    assert client.post(f"/api/refunds/{operation['id']}/reconcile").status_code == 200
+    with Session() as session:
+        assert session.scalar(select(Job).where(Job.reference_id == operation['id'])) is None

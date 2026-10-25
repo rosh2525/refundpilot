@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from backend.main import app
 from backend.config import POLICY
-from backend.db import Session,Payment,Case,Evidence,Proposal
+from backend.db import Session,Payment,Case,Evidence,Proposal,Audit
 from backend.ai import Recommendation,Citation,VisualAssessment
 from .conftest import reviewed_case,approved_refund
 
@@ -135,3 +135,60 @@ def test_evidence_daily_limit_rolls_back_payment_change(client,payment):
     with Session() as session:
         assert session.get(Payment,payment['id']).version==before
         assert session.scalar(select(Evidence)) is None
+
+
+def test_remove_requires_replacement_and_old_proposals_cannot_approve(client,payment,monkeypatch):
+    case=new_case(client,payment);path=f"/api/cases/{case['id']}/evidence"
+    first=client.post(path,json=photo()).json()
+    async def mock(*_):return recommendation(),'test-multimodal-model'
+    monkeypatch.setattr('backend.main.analyze',mock)
+    old=client.post(f"/api/cases/{case['id']}/analyze").json()['proposal']
+    assert old['state']=='ready'
+    removed=client.delete(path)
+    assert removed.status_code==200
+    assert removed.json()['evidence'] is None and removed.json()['evidence_replacement_required']
+    assert removed.json()['proposal']['state']=='superseded'
+    assert client.get(path).status_code==404
+    assert client.post(f"/api/proposals/{old['id']}/approve",json={'confirmed':True,'fingerprint':old['fingerprint']}).status_code==409
+    p=client.post(f"/api/cases/{case['id']}/analyze").json()['proposal']
+    assert p['state']=='blocked' and any('Attach a replacement' in b for b in p['blockers'])
+    assert client.post(f"/api/proposals/{p['id']}/approve",json={'confirmed':True,'fingerprint':p['fingerprint']}).status_code==409
+    second=client.post(path,json=photo('blue'))
+    assert second.status_code==201 and second.json()['sha256']!=first['sha256']
+    current=next(c for c in client.get('/api/dashboard').json()['cases'] if c['id']==case['id'])
+    assert not current['evidence_replacement_required']
+    p=client.post(f"/api/cases/{case['id']}/analyze").json()['proposal']
+    assert p['state']=='ready'
+    assert client.post(f"/api/proposals/{p['id']}/approve",json={'confirmed':True,'fingerprint':p['fingerprint']}).status_code==200
+    with Session() as session:
+        event=session.scalar(select(Audit).where(Audit.case_id==case['id'],Audit.action=='evidence_removed'))
+        assert event.details['sha256']==first['sha256']
+
+
+def test_blocked_photo_can_be_replaced_and_invalidates_old_review(client,payment):
+    case=new_case(client,payment);path=f"/api/cases/{case['id']}/evidence"
+    first=client.post(path,json=photo()).json()
+    old=client.post(f"/api/cases/{case['id']}/analyze").json()['proposal']
+    assert old['state']=='blocked'
+    assert client.post(path,json=photo('blue')).status_code==201
+    with Session() as session:
+        assert session.get(Proposal,old['id']).state=='superseded'
+        events=session.scalars(select(Audit).where(Audit.case_id==case['id'],Audit.action=='evidence_attached').order_by(Audit.created_at)).all()
+        assert events[-1].details['previous_sha256']==first['sha256']
+
+
+def test_evidence_removal_is_authenticated_and_rejected_after_approval(client,payment,monkeypatch):
+    case=new_case(client,payment);path=f"/api/cases/{case['id']}/evidence"
+    image=client.post(path,json=photo()).json()
+    async def mock(*_):return recommendation(),'test-model'
+    monkeypatch.setattr('backend.main.analyze',mock)
+    p=client.post(f"/api/cases/{case['id']}/analyze").json()['proposal']
+    assert client.post(f"/api/proposals/{p['id']}/approve",json={'confirmed':True,'fingerprint':p['fingerprint']}).status_code==200
+    assert client.delete(path,headers={'X-CSRF-Token':'wrong'}).status_code==403
+    assert client.delete(path).status_code==409
+    with TestClient(app) as anon:
+        anon.cookies.set('rp_csrf','test')
+        assert anon.delete(path,headers={'X-CSRF-Token':'test'}).status_code==401
+    assert client.get(path).status_code==200
+    with Session() as session:
+        assert session.scalar(select(Evidence).where(Evidence.case_id==case['id'])).sha256==image['sha256']

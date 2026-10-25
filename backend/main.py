@@ -136,6 +136,7 @@ def case_view(session, case):
     result["refund"] = as_dict(operation) if operation else None
     evidence = session.scalar(select(Evidence).where(Evidence.case_id == case.id))
     result["evidence"] = evidence_metadata(evidence) if evidence else None
+    result["evidence_replacement_required"] = not evidence and evidence_was_removed(session, case.id)
     result["return_economics"] = return_economics(case)
     return result
 
@@ -143,6 +144,28 @@ def case_view(session, case):
 def evidence_metadata(evidence):
     return {"id": evidence.id, "sha256": evidence.sha256, "mime_type": evidence.mime_type,
             "size_bytes": evidence.size_bytes, "url": f"/api/cases/{evidence.case_id}/evidence", "created_at": evidence.created_at}
+
+
+def evidence_was_removed(session, case_id):
+    return bool(session.scalar(select(Audit.id).where(Audit.case_id == case_id, Audit.action == "evidence_removed").limit(1)))
+
+
+def prepare_evidence_change(session, case_id):
+    case = session.get(Case, case_id)
+    if not case:
+        raise HTTPException(404, "Case not found.")
+    payment = payment_or_404(session, case.payment_id)
+    # Serialize attachment changes with approvals on the same payment.
+    changed = session.execute(update(Payment).where(Payment.id == payment.id, Payment.version == payment.version,
+        Payment.reserved_cents == 0).values(version=Payment.version + 1))
+    if not changed.rowcount:
+        raise HTTPException(409, "Payment state changed or a refund is unresolved. Refresh before changing evidence.")
+    if session.scalar(select(Refund.id).join(Proposal).where(Proposal.case_id == case_id)):
+        raise HTTPException(409, "Evidence cannot change after this case has an approved refund.")
+    session.execute(update(Proposal).where(Proposal.case_id == case_id,
+        Proposal.state.in_(["ready", "blocked"])).values(state="superseded"))
+    case.status = "new"
+    return case
 
 
 def return_economics(case):
@@ -310,20 +333,10 @@ async def attach_evidence(case_id: str, request: Request, _: Auth):
     except EvidenceError as exc:
         raise HTTPException(422, str(exc))
     with Session.begin() as session:
-        case = session.get(Case, case_id)
-        if not case:
-            raise HTTPException(404, "Case not found.")
-        payment = payment_or_404(session, case.payment_id)
-        # The conditional write serializes attachment changes with approval even
-        # on SQLite; on PostgreSQL the updated payment row is locked until commit.
-        changed = session.execute(update(Payment).where(Payment.id == payment.id, Payment.version == payment.version,
-            Payment.reserved_cents == 0).values(version=Payment.version + 1))
-        if not changed.rowcount:
-            raise HTTPException(409, "Payment state changed or a refund is unresolved. Refresh before attaching evidence.")
-        if session.scalar(select(Refund.id).join(Proposal).where(Proposal.case_id == case_id)):
-            raise HTTPException(409, "Evidence cannot change after this case has an approved refund.")
+        prepare_evidence_change(session, case_id)
         consume_quota(session, "images", 20, "Daily evidence upload allowance reached. Try again tomorrow.")
         image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
+        previous_sha256 = image.sha256 if image else None
         total = session.scalar(select(func.coalesce(func.sum(Evidence.size_bytes), 0)))
         if total - (image.size_bytes if image else 0) + normalized.size_bytes > 20 * 1024 * 1024:
             raise HTTPException(413, "The demo's 20 MiB evidence storage allowance is full.")
@@ -333,11 +346,23 @@ async def attach_evidence(case_id: str, request: Request, _: Auth):
         image.image_bytes, image.mime_type = normalized.image_bytes, normalized.mime_type
         image.sha256, image.size_bytes = normalized.sha256, normalized.size_bytes
         image.created_at = time.time()
-        session.execute(update(Proposal).where(Proposal.case_id == case_id, Proposal.state == "ready").values(state="superseded"))
-        case.status = "new"
         session.flush()
-        audit(session, "evidence_attached", case_id, sha256=image.sha256, size_bytes=image.size_bytes)
+        audit(session, "evidence_attached", case_id, sha256=image.sha256, previous_sha256=previous_sha256, size_bytes=image.size_bytes)
         return evidence_metadata(image)
+
+
+@app.delete("/api/cases/{case_id}/evidence")
+def remove_evidence(case_id: str, _: Auth):
+    with Session.begin() as session:
+        case = prepare_evidence_change(session, case_id)
+        image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
+        if not image:
+            raise HTTPException(404, "No evidence image attached.")
+        audit(session, "evidence_removed", case_id, sha256=image.sha256, size_bytes=image.size_bytes,
+              replacement_required=True)
+        session.delete(image)
+        session.flush()
+        return case_view(session, case)
 
 
 @app.get("/api/cases/{case_id}/evidence")
@@ -402,6 +427,7 @@ async def analyze_case(case_id: str, _: Auth):
         payment = payment_or_404(session, case.payment_id)
         image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
         evidence_hash = image.sha256 if image else None
+        replacement_required = not image and evidence_was_removed(session, case_id)
         if session.scalar(select(Refund.id).join(Proposal).where(Proposal.case_id == case_id)):
             raise HTTPException(409, "This case already has an approved refund operation.")
         if settings.gemini_api_key:
@@ -437,6 +463,8 @@ async def analyze_case(case_id: str, _: Auth):
         checks = blockers(payment, case.requested_cents, recommendation.amount_cents)
     if evidence_hash and source == "rule_based_preview":
         checks.append("Image assessment requires a working Gemini connection; preview cannot verify an attachment.")
+    if replacement_required:
+        checks.append("Photo evidence was removed. Attach a replacement and analyze it before approval.")
     with Session.begin() as session:
         current = session.get(Case, case_id)
         current_payment = payment_or_404(session, current.payment_id)
@@ -466,13 +494,27 @@ def approve(proposal_id: str, body: ApprovalInput, _: Auth):
 @app.post("/api/refunds/{refund_id}/reconcile")
 def reconcile(refund_id: str, _: Auth):
     with Session.begin() as session:
-        operation = session.get(Refund, refund_id)
+        operation = session.scalar(select(Refund).where(Refund.id == refund_id).with_for_update())
         if not operation:
             raise HTTPException(404, "Refund operation not found.")
         payment_or_404(session, operation.payment_id)
         if operation.status in {"completed", "failed", "cancelled"}:
             return as_dict(operation)
         job = session.scalar(select(Job).where(Job.reference_id == operation.id))
+        if job is None:
+            # Repair only the queue entry; retain the original refund payload,
+            # reservation and PayPal request ID for idempotent recovery.
+            try:
+                with session.begin_nested():
+                    session.add(Job(kind="refund", reference_id=operation.id))
+                    session.flush()
+                audit(session, "reconciliation_job_restored", operation_id=operation.id)
+            except IntegrityError:
+                # A concurrent reconciliation restored the unique job first.
+                pass
+            job = session.scalar(select(Job).where(Job.reference_id == operation.id))
+        if job is None:
+            raise HTTPException(503, "The reconciliation job could not be restored. Retry without creating a new refund.")
         if job.state != "running":
             job.state, job.run_after = "pending", time.time()
         audit(session, "reconciliation_requested", operation_id=operation.id)

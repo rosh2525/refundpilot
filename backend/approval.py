@@ -7,7 +7,7 @@ import hmac
 from fastapi import HTTPException
 from sqlalchemy import select, update
 from .config import POLICY, POLICY_HASH
-from .db import Case, Evidence, Payment, Proposal, Refund, Job, audit, as_dict
+from .db import Audit, Case, Evidence, Payment, Proposal, Refund, Job, audit, as_dict
 from .policy import blockers, fingerprint
 
 
@@ -30,6 +30,8 @@ def approve_proposal(session, proposal_id, *, confirmed, reviewed_fingerprint, m
         raise HTTPException(409, "Preview proposals cannot execute PayPal refunds.")
     evidence = session.scalar(select(Evidence).where(Evidence.case_id == case.id))
     current_evidence_hash = evidence.sha256 if evidence else None
+    if not evidence and session.scalar(select(Audit.id).where(Audit.case_id == case.id, Audit.action == "evidence_removed").limit(1)):
+        raise HTTPException(409, "Photo evidence was removed. Attach a replacement and analyze it before approval.")
     if proposal.evidence_sha256 != current_evidence_hash:
         raise HTTPException(409, "The attached evidence changed; analyze it again.")
     if fingerprint(case.id, payment.capture_id, proposal.amount_cents, proposal.payment_version, evidence_sha256=proposal.evidence_sha256) != proposal.fingerprint:

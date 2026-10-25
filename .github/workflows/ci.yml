@@ -17,5 +17,5 @@ jobs:
       - run: pytest -q
       - run: alembic upgrade head
       - run: alembic check
-      - run: npm ci && npm run test:csv && npm run build && npm audit --audit-level=high
+      - run: npm ci && npm run test:csv && npm run test:balances && npm run build && npm audit --audit-level=high
         working-directory: frontend

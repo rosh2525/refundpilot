@@ -1,13 +1,14 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Download, Search, SlidersHorizontal } from 'lucide-react';
 import { AgGridProvider, AgGridReact } from 'ag-grid-react';
-import { ClientSideRowModelModule, CsvExportModule, TextFilterModule, NumberFilterModule, QuickFilterModule, PaginationModule, TooltipModule, themeQuartz, type ColDef, type CsvExportParams } from 'ag-grid-community';
+import { ClientSideRowModelModule, CsvExportModule, TextFilterModule, NumberFilterModule, QuickFilterModule, PaginationModule, TooltipModule, CellStyleModule, themeQuartz, type ColDef, type CsvExportParams } from 'ag-grid-community';
 import type { Dashboard } from '../types';
 import { safeCsvValue } from '../safeCsv';
+import { availableCents, capturedCents } from '../paymentBalance';
 
 type RecordKind = 'payments'|'history'|'activity';
 type WorkbenchRow = {id:string;status:string;[key:string]:string|number|null};
-const modules = [ClientSideRowModelModule, CsvExportModule, TextFilterModule, NumberFilterModule, QuickFilterModule, PaginationModule, TooltipModule];
+const modules = [ClientSideRowModelModule, CsvExportModule, TextFilterModule, NumberFilterModule, QuickFilterModule, PaginationModule, TooltipModule, CellStyleModule];
 const money = (value:unknown) => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(Number(value || 0));
 const label = (value:string) => value.toLowerCase().replaceAll('_',' ').replace(/^./,c=>c.toUpperCase());
 const theme = themeQuartz.withParams({fontFamily:'Inter, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',fontSize:12,accentColor:'#207260',foregroundColor:'#355851',backgroundColor:'#ffffff',headerBackgroundColor:'#f1f6f3',borderColor:'#e1e7e8',rowBorder:{color:'#edf1ef'},wrapperBorder:false,headerHeight:40,rowHeight:46});
@@ -19,7 +20,7 @@ export function RecordsWorkbench({kind,data,children,onPaymentAction}:{kind:Reco
  const [status,setStatus] = useState('');
  const grid = useRef<AgGridReact<WorkbenchRow>>(null);
  const rows = useMemo<WorkbenchRow[]>(()=>{
-  if(kind==='payments')return data.payments.map(p=>({id:p.id,title:p.title,reference:p.capture_id||p.order_id,status:p.status,amount_cents:p.capture_id?p.amount_cents:0,refunded_cents:p.refunded_cents,available_cents:p.amount_cents-p.refunded_cents-p.reserved_cents,reserved_cents:p.reserved_cents,action_label:!p.capture_id&&p.approval_url?'Complete checkout':'Review request',can_open:(!p.capture_id&&p.approval_url)||(p.capture_id&&p.amount_cents-p.refunded_cents-p.reserved_cents>0)?1:0,date:new Date((p.captured_at||p.created_at)*1000).toISOString()}));
+  if(kind==='payments')return data.payments.map(p=>({id:p.id,title:p.title,reference:p.capture_id||p.order_id,status:p.status,amount_cents:capturedCents(p),refunded_cents:p.refunded_cents,available_cents:availableCents(p),reserved_cents:p.reserved_cents,action_label:!p.capture_id&&p.approval_url?'Complete checkout':'Review request',can_open:(!p.capture_id&&p.approval_url)||availableCents(p)>0?1:0,date:new Date((p.captured_at||p.created_at)*1000).toISOString()}));
   if(kind==='history')return data.refunds.map(r=>({id:r.id,status:r.status,amount_cents:r.amount_cents,reference:r.paypal_refund_id||'Awaiting confirmation',request_id:r.request_id,date:new Date(r.created_at*1000).toISOString(),customer_request:data.cases.find(c=>c.proposal?.id===r.proposal_id)?.statement||'',payment:data.payments.find(p=>p.id===r.payment_id)?.title||r.payment_id,last_error:r.last_error||''}));
   return data.audit.map(a=>({id:a.id,status:a.action,action:label(a.action),details:Object.entries(a.details).map(([key,value])=>`${key.replaceAll('_',' ')}: ${typeof value==='object'?JSON.stringify(value):String(value)}`).join(' · '),date:new Date(a.created_at*1000).toISOString()}));
  },[kind,data]);

@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test:csv": "node --experimental-strip-types --test tests/safeCsv.test.mjs"
+    "test:csv": "node --experimental-strip-types --test tests/safeCsv.test.mjs",
+    "test:balances": "node --experimental-strip-types --test tests/paymentBalance.test.mjs"
   },
   "dependencies": {
     "ag-grid-community": "36.2.0",
