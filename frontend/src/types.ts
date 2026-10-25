@@ -1,0 +1,10 @@
+export type Payment = {id:string;order_id:string;capture_id:string|null;title:string;amount_cents:number;refunded_cents:number;reserved_cents:number;status:string;source:string;created_at:number;captured_at:number|null;approval_url:string|null};
+export type Citation = {source:string;reference:string;quote:string};
+export type VisualAssessment = {damage:'damage_visible'|'no_visible_damage'|'inconclusive';consistency:'matches_claim'|'contradicts_claim'|'inconclusive';observation:string};
+export type Evidence = {id:string;sha256:string;mime_type:string;size_bytes:number;url:string;created_at?:number};
+export type ReturnEconomics = {estimated_handling_cents:number;partial_refund_cents:number;difference_cents:number;disclaimer:string};
+export type Proposal = {id:string;decision:string;amount_cents:number;explanation:string;citations:Citation[];blockers:string[];state:string;source:string;fingerprint:string;visual_assessment?:VisualAssessment|null};
+export type Refund = {id:string;payment_id:string;proposal_id:string;amount_cents:number;status:string;paypal_refund_id:string|null;request_id:string;last_error:string|null;created_at:number};
+export type Case = {id:string;payment_id:string;statement:string;requested_cents:number;status:string;created_at:number;proposal:Proposal|null;refund:Refund|null;evidence?:Evidence|null;return_shipping_cents?:number|null;restocking_cents?:number|null;return_economics?:ReturnEconomics|null};
+export type Audit = {id:string;action:string;created_at:number;details:Record<string,unknown>};
+export type Dashboard = {payments:Payment[];cases:Case[];refunds:Refund[];audit:Audit[]};

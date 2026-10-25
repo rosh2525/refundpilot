@@ -8,6 +8,17 @@ A merchant refund desk that turns a customer request into an evidence-backed rec
 
 Built for the 2026 PayPal AI Hackathon. React + TypeScript frontend, Python/FastAPI backend, PostgreSQL, PayPal Orders v2 / Payments v2, and Gemini structured output.
 
+## Review workbench
+
+- **Optional photo-assisted review:** upload one JPEG/PNG image for a case. The server verifies the actual format, rejects animation, caps input at 2 MiB / 12 megapixels, strips metadata, and scales to a maximum 1600px edge. Normalized bytes stay in PostgreSQL, behind authenticated access. Only use fictional test evidence; analysis sends the image to Gemini. A photo does not prove authenticity, ownership, SKU, fulfillment, or physical damage.
+- **Grounded visual observations:** Gemini reports visible damage and consistency with the customer claim. Missing, unclear, contradictory, or no-visible-damage assessments cannot authorize a refund. Text citations and financial checks still apply. Evidence hashes are bound to proposals; changing an attachment invalidates older approvals.
+- **Return handling estimate:** optional merchant-entered shipping and restocking costs are compared with the requested partial refund. The difference is not net margin or full-return savings; recovered item value, full refund, fees and replacement costs are excluded. Unknown inputs remain unknown.
+- **AG Grid Community records:** Payments, Refund history, and Audit trail support sorting, text/USD filters, status filters, search, pagination, and CSV export with formula-prefix escaping. Simple views remain available. No Enterprise pivoting or paid license is required.
+- **Safety lab:** authenticated, disposable simulations exercise the shared approval validator: five duplicate approvals, two competing $8 proposals against $10, an outdated policy hash, and a fixed blocked recommendation. These run in temporary SQLite with no provider/model calls or worker execution; they are not PostgreSQL or live PayPal stress tests. The ordinary request form also offers a fictional injection example for an actual AI review.
+- **Review packet:** download a private JSON draft containing case information, proposal evidence, refund references, and audit events. It is not submitted to the PayPal Disputes API and does not independently establish delivery or eligibility.
+
+The demo caps image uploads at 20 per UTC day, aggregate stored images at 20 MiB, and safety runs at 30 per UTC day. See [suggestion assessment](docs/IDEA_REVIEW.md) for what was implemented, deferred, or rejected and why.
+
 ## Two explicit operating modes
 
 | Mode | Payments | Recommendation | Purpose |
@@ -92,6 +103,7 @@ pytest -q
 alembic check
 cd frontend
 npm ci
+npm run test:csv
 npm run build
 npm audit --audit-level=high
 ```
@@ -114,6 +126,6 @@ See [architecture](docs/ARCHITECTURE.md), [submission draft](docs/SUBMISSION.md)
 
 ## Boundaries
 
-One merchant, app-created orders, USD, pasted text, and explicit approval. No production payments, multi-merchant onboarding, payouts, dispute adjudication, real shipping integration, or email ingestion. Avoid making external refunds on app-owned demo captures; untracked provider changes require reconciliation. Customer messages and the example Northstar merchant are fictional.
+One merchant, app-created orders, USD, pasted text with optional image evidence, and explicit approval. No production payments, multi-merchant onboarding, payouts, dispute adjudication, real shipping integration, or email ingestion. Avoid making external refunds on app-owned demo captures; untracked provider changes require reconciliation. Customer messages and the example Northstar merchant are fictional.
 
 MIT licensed. This project is an independent hackathon submission and does not imply PayPal endorsement.

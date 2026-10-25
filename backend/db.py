@@ -1,6 +1,6 @@
 import time
 import uuid
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String, Text, create_engine, event
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, LargeBinary, String, Text, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from .config import settings
 
@@ -49,7 +49,19 @@ class Case(Base):
     payment_id: Mapped[str] = mapped_column(ForeignKey("payments.id"))
     statement: Mapped[str] = mapped_column(Text)
     requested_cents: Mapped[int] = mapped_column(Integer)
+    return_shipping_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    restocking_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default="new")
+    created_at: Mapped[float] = mapped_column(Float, default=time.time)
+
+class Evidence(Base):
+    __tablename__ = "case_evidence"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), unique=True)
+    image_bytes: Mapped[bytes] = mapped_column(LargeBinary)
+    mime_type: Mapped[str] = mapped_column(String(30))
+    sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[float] = mapped_column(Float, default=time.time)
 
 class Proposal(Base):
@@ -60,6 +72,8 @@ class Proposal(Base):
     amount_cents: Mapped[int] = mapped_column(Integer, default=0)
     explanation: Mapped[str] = mapped_column(Text)
     citations: Mapped[list] = mapped_column(JSON, default=list)
+    visual_assessment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    evidence_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     blockers: Mapped[list] = mapped_column(JSON, default=list)
     source: Mapped[str] = mapped_column(String(50))
     policy_hash: Mapped[str] = mapped_column(String(64))

@@ -54,3 +54,22 @@ The AI receives only synthetic policy, selected payment facts, and customer text
 Deploy one service process with a persistent PostgreSQL database; the filesystem is expendable. Database schema is managed by Alembic. The worker resumes after deploys. `/health` is the hosting health check. Monitor job failures, unresolved refunds, AI quota exhaustion, and database usage through service logs and the app audit trail. Logs contain operation identifiers, not passwords or tokens.
 
 If an operation remains unknown: inspect the PayPal sandbox merchant dashboard and its request/refund IDs. Use **Check status** for an existing known provider ID. Do not issue another refund or clear its reservation merely to make the UI look successful. Reconcile against authoritative PayPal records first.
+
+
+## Optional image evidence and isolated demonstrations
+
+`case_evidence` stores at most one normalized JPEG/PNG per case as a database binary, MIME type, byte count, timestamp and SHA-256 digest. Images are excluded from dashboard JSON and review packets; the image endpoint requires merchant authentication. Upload bodies are streamed with a bound before image decoding. A quota row serializes the daily upload/storage checks. Image changes conditionally increment the payment version and supersede ready proposals; approved cases cannot change attachments. Analysis checks the evidence hash and payment version again after the AI call. Approval compares the stored hash and cryptographic fingerprint against current evidence before reserving funds.
+
+Gemini receives the normalized image as inlineData alongside the supplied policy, customer text and payment document. Visual observations cannot authenticate a photo or item. Uncertain, contradictory, absent, or no-visible-damage assessments block a refund recommendation. Return-cost arithmetic uses optional merchant estimates in integer cents and has no authority over payment eligibility.
+
+`backend/approval.py` contains the transaction shared by the merchant approval endpoint and the Safety lab. Lab runs create a fresh temporary SQLite database, use its own Session and synthetic records, exercise concurrent approvals, and dispose all state. They never rebind merchant sessions, mutate global policy, call Gemini/PayPal, or execute queued jobs. The lab therefore demonstrates the application invariant, not provider idempotency or PostgreSQL integration. Existing payment tests and deployed sandbox verification remain separate.
+
+Additional authenticated APIs:
+
+- `POST /api/cases/{id}/evidence`: bounded JSON `{image_base64, media_type}`; returns metadata and invalidates old proposals.
+- `GET /api/cases/{id}/evidence`: authenticated normalized image response, no-store.
+- `GET /api/cases/{id}/packet`: private review draft, without image bytes or credentials.
+- `GET /api/lab`: scenario descriptions and explicit isolation limitations.
+- `POST /api/lab/run`: `{scenario}`; results of disposable approval simulations.
+
+The AG Grid Community workbench is loaded lazily on records pages. CSV exports include filtered/sorted rows and escape formula-like text. Enterprise features and external tracking/dispute writes are not part of this implementation.

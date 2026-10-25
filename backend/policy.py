@@ -26,6 +26,8 @@ def blockers(payment, requested_cents, amount_cents, now=None):
         errors.append("An earlier refund is still reserved, pending, or unresolved.")
     return errors
 
-def fingerprint(case_id, capture_id, amount_cents, payment_version, policy_hash=POLICY_HASH):
+def fingerprint(case_id, capture_id, amount_cents, payment_version, policy_hash=POLICY_HASH, evidence_sha256=None):
     value = [case_id, capture_id, amount_cents, payment_version, policy_hash]
+    if evidence_sha256 is not None:
+        value.append(evidence_sha256)
     return hashlib.sha256(json.dumps(value, separators=(",", ":")).encode()).hexdigest()

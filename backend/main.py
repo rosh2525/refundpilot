@@ -14,15 +14,18 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from .config import settings, POLICY, POLICY_HASH
-from .db import Base, engine, Session, Payment, Case, Proposal, Refund, Job, Webhook, Audit, Quota, as_dict, audit, uid
+from .db import Base, engine, Session, Payment, Case, Evidence, Proposal, Refund, Job, Webhook, Audit, Quota, as_dict, audit, uid
 from .policy import blockers, fingerprint
+from .approval import approve_proposal
 from .paypal import paypal, PayPalError, cents
 from .ai import analyze, AIUnavailable
 from .worker import worker_loop
+from .evidence import normalize_image, EvidenceError, MAX_BASE64_LENGTH
+from .lab import lab_config, run_scenario, Scenario
 
 logging.basicConfig(level=logging.INFO)
 serializer = URLSafeTimedSerializer(settings.session_secret, salt="refundpilot-session-v1")
@@ -56,14 +59,17 @@ app = FastAPI(title="RefundPilot", version="1.0.0", lifespan=lifespan, docs_url=
 
 @app.middleware("http")
 async def protection(request: Request, call_next):
-    if request.headers.get("content-length", "").isdigit() and int(request.headers["content-length"]) > 65536:
+    image_upload = request.method == "POST" and request.url.path.startswith("/api/cases/") and request.url.path.endswith("/evidence")
+    body_limit = MAX_BASE64_LENGTH + 4096 if image_upload else 65536
+    if request.headers.get("content-length", "").isdigit() and int(request.headers["content-length"]) > body_limit:
         return JSONResponse({"detail": "Request is too large."}, status_code=413)
     if request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path != "/api/paypal/webhook":
         origin = request.headers.get("origin")
         if origin and origin != settings.app_url:
             return JSONResponse({"detail": "Request origin is not allowed."}, status_code=403)
         if request.url.path != "/api/session":
-            if not request.headers.get("x-csrf-token") or not hmac.compare_digest(request.headers.get("x-csrf-token", ""), request.cookies.get("rp_csrf", "")):
+            csrf_header, csrf_cookie = request.headers.get("x-csrf-token", ""), request.cookies.get("rp_csrf", "")
+            if not csrf_header or not csrf_header.isascii() or not csrf_cookie.isascii() or not hmac.compare_digest(csrf_header, csrf_cookie):
                 return JSONResponse({"detail": "Session verification failed. Refresh and sign in again."}, status_code=403)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -93,11 +99,22 @@ class CaseInput(BaseModel):
     payment_id: str = Field(min_length=1, max_length=36)
     statement: str = Field(min_length=15, max_length=6000)
     requested_cents: int = Field(gt=0, le=1000000, strict=True)
+    return_shipping_cents: int | None = Field(default=None, ge=0, le=1000000, strict=True)
+    restocking_cents: int | None = Field(default=None, ge=0, le=1000000, strict=True)
+
+class EvidenceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image_base64: str = Field(min_length=1, max_length=MAX_BASE64_LENGTH)
+    media_type: str = Field(max_length=30)
+
+class LabInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scenario: Scenario
 
 class ApprovalInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    fingerprint: str
-    confirmed: bool
+    fingerprint: str = Field(min_length=1, max_length=128)
+    confirmed: bool = Field(strict=True)
 
 
 def source_filter():
@@ -117,7 +134,37 @@ def case_view(session, case):
     result["proposal"] = as_dict(proposal) if proposal else None
     operation = session.scalar(select(Refund).join(Proposal).where(Proposal.case_id == case.id))
     result["refund"] = as_dict(operation) if operation else None
+    evidence = session.scalar(select(Evidence).where(Evidence.case_id == case.id))
+    result["evidence"] = evidence_metadata(evidence) if evidence else None
+    result["return_economics"] = return_economics(case)
     return result
+
+
+def evidence_metadata(evidence):
+    return {"id": evidence.id, "sha256": evidence.sha256, "mime_type": evidence.mime_type,
+            "size_bytes": evidence.size_bytes, "url": f"/api/cases/{evidence.case_id}/evidence", "created_at": evidence.created_at}
+
+
+def return_economics(case):
+    if case.return_shipping_cents is None or case.restocking_cents is None:
+        return None
+    handling = case.return_shipping_cents + case.restocking_cents
+    return {"estimated_handling_cents": handling, "partial_refund_cents": case.requested_cents,
+            "difference_cents": handling - case.requested_cents,
+            "disclaimer": "Merchant-supplied handling estimate minus requested partial refund. Not net margin or full-return savings: excludes item recovery value, full refund, fees, tax, and replacement costs."}
+
+
+def consume_quota(session, prefix, limit, message):
+    key = prefix + ":" + datetime.now(timezone.utc).date().isoformat()
+    if not session.get(Quota, key):
+        try:
+            with session.begin_nested():
+                session.add(Quota(key=key, used=0)); session.flush()
+        except IntegrityError:
+            pass
+    changed = session.execute(update(Quota).where(Quota.key == key, Quota.used < limit).values(used=Quota.used + 1))
+    if not changed.rowcount:
+        raise HTTPException(429, message)
 
 @app.exception_handler(PayPalError)
 async def paypal_error(request, error):
@@ -238,13 +285,113 @@ def create_case(body: CaseInput, _: Auth):
         payment = payment_or_404(session, body.payment_id)
         if not payment.capture_id:
             raise HTTPException(409, "Complete buyer approval and payment capture first.")
-        case = Case(payment_id=payment.id, statement=body.statement.strip(), requested_cents=body.requested_cents)
+        case = Case(payment_id=payment.id, statement=body.statement.strip(), requested_cents=body.requested_cents,
+                    return_shipping_cents=body.return_shipping_cents, restocking_cents=body.restocking_cents)
         if len(case.statement) < 15:
             raise HTTPException(422, "Provide a customer request of at least 15 characters.")
         session.add(case)
         session.flush()
         audit(session, "case_created", case.id, payment_id=payment.id, requested_cents=case.requested_cents)
         return case_view(session, case)
+
+@app.post("/api/cases/{case_id}/evidence", status_code=201)
+async def attach_evidence(case_id: str, request: Request, _: Auth):
+    # Bound streamed bodies too; Content-Length may be absent or incorrect.
+    raw = bytearray()
+    async for part in request.stream():
+        raw.extend(part)
+        if len(raw) > MAX_BASE64_LENGTH + 4096:
+            raise HTTPException(413, "The image must be at most 2 MiB.")
+    try:
+        body = EvidenceInput.model_validate_json(bytes(raw))
+        normalized = normalize_image(body.image_base64, body.media_type)
+    except ValidationError:
+        raise HTTPException(422, "Provide a bounded base64 JPEG/PNG image and its media_type.")
+    except EvidenceError as exc:
+        raise HTTPException(422, str(exc))
+    with Session.begin() as session:
+        case = session.get(Case, case_id)
+        if not case:
+            raise HTTPException(404, "Case not found.")
+        payment = payment_or_404(session, case.payment_id)
+        # The conditional write serializes attachment changes with approval even
+        # on SQLite; on PostgreSQL the updated payment row is locked until commit.
+        changed = session.execute(update(Payment).where(Payment.id == payment.id, Payment.version == payment.version,
+            Payment.reserved_cents == 0).values(version=Payment.version + 1))
+        if not changed.rowcount:
+            raise HTTPException(409, "Payment state changed or a refund is unresolved. Refresh before attaching evidence.")
+        if session.scalar(select(Refund.id).join(Proposal).where(Proposal.case_id == case_id)):
+            raise HTTPException(409, "Evidence cannot change after this case has an approved refund.")
+        consume_quota(session, "images", 20, "Daily evidence upload allowance reached. Try again tomorrow.")
+        image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
+        total = session.scalar(select(func.coalesce(func.sum(Evidence.size_bytes), 0)))
+        if total - (image.size_bytes if image else 0) + normalized.size_bytes > 20 * 1024 * 1024:
+            raise HTTPException(413, "The demo's 20 MiB evidence storage allowance is full.")
+        if image is None:
+            image = Evidence(case_id=case_id)
+            session.add(image)
+        image.image_bytes, image.mime_type = normalized.image_bytes, normalized.mime_type
+        image.sha256, image.size_bytes = normalized.sha256, normalized.size_bytes
+        image.created_at = time.time()
+        session.execute(update(Proposal).where(Proposal.case_id == case_id, Proposal.state == "ready").values(state="superseded"))
+        case.status = "new"
+        session.flush()
+        audit(session, "evidence_attached", case_id, sha256=image.sha256, size_bytes=image.size_bytes)
+        return evidence_metadata(image)
+
+
+@app.get("/api/cases/{case_id}/evidence")
+def get_evidence(case_id: str, _: Auth):
+    with Session() as session:
+        case = session.get(Case, case_id)
+        if not case:
+            raise HTTPException(404, "Case not found.")
+        payment_or_404(session, case.payment_id)
+        image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
+        if not image:
+            raise HTTPException(404, "No evidence image attached.")
+        return Response(image.image_bytes, media_type=image.mime_type, headers={"Content-Disposition":"inline"})
+
+
+@app.get("/api/cases/{case_id}/packet")
+def review_packet(case_id: str, _: Auth):
+    with Session() as session:
+        case = session.get(Case, case_id)
+        if not case:
+            raise HTTPException(404, "Case not found.")
+        payment = payment_or_404(session, case.payment_id)
+        proposals = session.scalars(select(Proposal).where(Proposal.case_id == case_id).order_by(Proposal.created_at)).all()
+        refunds = session.scalars(select(Refund).join(Proposal).where(Proposal.case_id == case_id)).all()
+        operation_ids = {op.id for op in refunds}
+        provider_ids = {op.paypal_refund_id for op in refunds if op.paypal_refund_id}
+        events = [event for event in session.scalars(select(Audit).order_by(Audit.created_at)).all()
+                  if event.case_id == case_id or event.details.get("operation_id") in operation_ids]
+        webhooks = []
+        for event in session.scalars(select(Webhook)).all():
+            resource = event.payload.get("resource", {})
+            if resource.get("id") in provider_ids:
+                webhooks.append({"event_id":event.event_id,"event_type":event.event_type,"verified_at":event.verified_at})
+        image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
+        return {"format":"refundpilot-review-packet-v1", "generated_at":time.time(), "mode":settings.mode,
+                "purpose":"Merchant review draft; not submitted to PayPal and not a determination of dispute eligibility.",
+                "limitations":["Customer statements and photos are unverified claims.","Local audit records do not independently prove delivery, authenticity, or fulfillment.","No bank details, API credentials, session cookies, or image bytes are included."],
+                "payment":{key:getattr(payment,key) for key in ("id","order_id","capture_id","currency","amount_cents","refunded_cents","reserved_cents","status","captured_at")},
+                "case":as_dict(case), "current_policy":POLICY, "evidence":evidence_metadata(image) if image else None,
+                "return_economics":return_economics(case), "proposals":[as_dict(p) for p in proposals],
+                "refunds":[as_dict(op) for op in refunds], "audit":[as_dict(event) for event in events], "verified_refund_notifications":webhooks}
+
+
+@app.get("/api/lab")
+def safety_lab(_: Auth):
+    return lab_config()
+
+
+@app.post("/api/lab/run")
+def safety_lab_run(body: LabInput, _: Auth):
+    with Session.begin() as session:
+        consume_quota(session, "lab", 30, "Daily safety demonstration allowance reached. Try again tomorrow.")
+    return run_scenario(body.scenario)
+
 
 @app.post("/api/cases/{case_id}/analyze")
 async def analyze_case(case_id: str, _: Auth):
@@ -253,6 +400,8 @@ async def analyze_case(case_id: str, _: Auth):
         if not case:
             raise HTTPException(404, "Case not found.")
         payment = payment_or_404(session, case.payment_id)
+        image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
+        evidence_hash = image.sha256 if image else None
         if session.scalar(select(Refund.id).join(Proposal).where(Proposal.case_id == case_id)):
             raise HTTPException(409, "This case already has an approved refund operation.")
         if settings.gemini_api_key:
@@ -275,24 +424,33 @@ async def analyze_case(case_id: str, _: Auth):
         with Session.begin() as session:
             audit(session, "ai_unavailable", case_id, reason=str(exc))
         raise HTTPException(503, str(exc))
-    checks = blockers(payment, case.requested_cents, recommendation.amount_cents)
+    # Zero is a valid deny/review recommendation, not an invalid refund request.
+    checked_amount = recommendation.amount_cents if recommendation.decision == "refund" else case.requested_cents
+    checks = blockers(payment, case.requested_cents, checked_amount)
     if recommendation.decision != "refund":
         checks.append("This recommendation requires review or denial; it is not executable.")
     if recommendation.missing_information:
         checks.extend(recommendation.missing_information)
     preview = source == "rule_based_preview" and settings.mode == "preview"
-    if preview:
+    if preview and not evidence_hash:
         # Deliberately separate simulated workflow from AI-backed proposals.
         checks = blockers(payment, case.requested_cents, recommendation.amount_cents)
+    if evidence_hash and source == "rule_based_preview":
+        checks.append("Image assessment requires a working Gemini connection; preview cannot verify an attachment.")
     with Session.begin() as session:
         current = session.get(Case, case_id)
+        current_payment = payment_or_404(session, current.payment_id)
+        current_image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))
+        if current_payment.version != payment.version or (current_image.sha256 if current_image else None) != evidence_hash:
+            raise HTTPException(409, "Payment or image evidence changed during analysis. Analyze the current details again.")
         if session.scalar(select(Refund.id).join(Proposal).where(Proposal.case_id == case_id)):
             raise HTTPException(409, "A refund was already approved while this analysis was running.")
         session.execute(update(Proposal).where(Proposal.case_id == case_id, Proposal.state == "ready").values(state="superseded"))
         proposal = Proposal(case_id=case_id, decision="preview" if preview else recommendation.decision, amount_cents=recommendation.amount_cents,
             explanation=recommendation.explanation, citations=[citation.model_dump() for citation in recommendation.citations], blockers=checks,
             source=source, policy_hash=POLICY_HASH, payment_version=payment.version,
-            fingerprint=fingerprint(case_id, payment.capture_id, recommendation.amount_cents, payment.version), state="blocked" if checks else "ready")
+            evidence_sha256=evidence_hash, visual_assessment=recommendation.visual_assessment.model_dump() if recommendation.visual_assessment else None,
+            fingerprint=fingerprint(case_id, payment.capture_id, recommendation.amount_cents, payment.version, evidence_sha256=evidence_hash), state="blocked" if checks else "ready")
         session.add(proposal)
         current.status = "reviewed"
         session.flush()
@@ -302,42 +460,8 @@ async def analyze_case(case_id: str, _: Auth):
 @app.post("/api/proposals/{proposal_id}/approve")
 def approve(proposal_id: str, body: ApprovalInput, _: Auth):
     with Session.begin() as session:
-        proposal = session.get(Proposal, proposal_id)
-        if not proposal:
-            raise HTTPException(404, "Proposal not found.")
-        case = session.get(Case, proposal.case_id)
-        payment = payment_or_404(session, case.payment_id)
-        existing = session.scalar(select(Refund).where(Refund.proposal_id == proposal_id))
-        if existing:
-            return as_dict(existing)
-        if not body.confirmed or not hmac.compare_digest(body.fingerprint, proposal.fingerprint):
-            raise HTTPException(400, "Confirm the exact reviewed proposal before approval.")
-        if proposal.state != "ready" or proposal.blockers or proposal.policy_hash != POLICY_HASH or proposal.decision not in {"refund", "preview"}:
-            raise HTTPException(409, "The proposal is blocked, outdated, or already superseded.")
-        if proposal.decision == "preview" and settings.mode != "preview":
-            raise HTTPException(409, "Preview proposals cannot execute PayPal refunds.")
-        if fingerprint(case.id, payment.capture_id, proposal.amount_cents, proposal.payment_version) != proposal.fingerprint:
-            raise HTTPException(409, "The approved proposal was modified; analyze it again.")
-        errors = blockers(payment, case.requested_cents, proposal.amount_cents)
-        if errors:
-            raise HTTPException(409, " ".join(errors))
-        # Atomic compare-and-reserve prevents two tabs/proposals from spending the same balance.
-        reserved = session.execute(update(Payment).where(Payment.id == payment.id, Payment.version == proposal.payment_version,
-            Payment.reserved_cents == 0, Payment.amount_cents - Payment.refunded_cents - Payment.reserved_cents >= proposal.amount_cents).values(
-            reserved_cents=Payment.reserved_cents + proposal.amount_cents, version=Payment.version + 1))
-        if not reserved.rowcount:
-            raise HTTPException(409, "Payment state changed. Refresh and analyze a new proposal.")
-        claimed = session.execute(update(Proposal).where(Proposal.id == proposal.id, Proposal.state == "ready").values(state="approved"))
-        if not claimed.rowcount:
-            raise HTTPException(409, "This proposal has already been handled.")
-        operation = Refund(proposal_id=proposal.id, payment_id=payment.id, amount_cents=proposal.amount_cents,
-            payload={"amount": {"value": f"{proposal.amount_cents // 100}.{proposal.amount_cents % 100:02d}", "currency_code": "USD"}, "note_to_payer": "Merchant-approved refund via RefundPilot"})
-        session.add(operation)
-        session.flush()
-        session.add(Job(kind="refund", reference_id=operation.id))
-        case.status = "approved"
-        audit(session, "merchant_approved_refund", case.id, operation_id=operation.id, proposal_fingerprint=proposal.fingerprint, amount_cents=proposal.amount_cents, policy_version=POLICY["version"])
-        return as_dict(operation)
+        return approve_proposal(session, proposal_id, confirmed=body.confirmed,
+                                reviewed_fingerprint=body.fingerprint, mode=settings.mode)
 
 @app.post("/api/refunds/{refund_id}/reconcile")
 def reconcile(refund_id: str, _: Auth):

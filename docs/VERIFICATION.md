@@ -27,3 +27,15 @@ Verified on 23 October 2026 against https://refundpilot.onrender.com.
 - Put dedicated judge login and buyer access into private submission testing instructions and retain access through judging.
 
 These observations establish actual sandbox integration; no live funds were moved. Test transaction IDs and screenshots are kept in ignored local artifacts rather than published with credentials.
+
+
+## 25 October 2026: bounded upgrade checks
+
+- 108 backend tests pass, including image validation, evidence-bound approvals, upload limits, return estimates, and isolated approval simulations.
+- Two CSV security tests pass; production frontend builds and the full dependency audit reports zero vulnerabilities.
+- New Alembic migration upgrades/downgrades cleanly on a disposable SQLite database, preserving an existing captured payment and balances. Deployment/PostgreSQL migration remains a separate check.
+- Computer-use checks on an isolated local preview passed AG Grid sorting, text/status/USD filters, filtered CSV export, Simple view actions, authenticated review-packet download, image upload/normalization, optional zero-cost input, and all four Safety Lab scenarios.
+- The 390px request form scrolls without hiding its submit control. No model/provider calls were used for these local UI checks.
+- Multimodal Gemini requests and fail-closed visual checks are covered by controlled-response tests. They do not establish deployed model accuracy. The existing 2:02 video predates these upgrades.
+
+Screenshots and illustrative test evidence are in ignored local artifacts/upgrades/. The detailed implementation decisions and remaining checks are in docs/IDEA_REVIEW.md.
