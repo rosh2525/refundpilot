@@ -13,7 +13,7 @@ Reviewed on **25 October 2026** against the current repository and official prod
 
 The application keeps its private merchant login, MIT license, free Render/Neon deployment design, and existing durable database worker. It does not add a public login shortcut, live carrier verification, automated dispute responses, paid workflows, an MCP server, or a second project.
 
-**Verification boundary:** these changes are local implementation until a deployment and post-deploy checks are recorded. Mocked Gemini/image tests prove request construction and application validation, not model accuracy. Existing text-only PayPal sandbox evidence does not validate the new multimodal flow. Do not describe the hosted app or existing demo video as containing this revision until they are updated and checked.
+**Verification boundary:** runtime commit `3dacb8e` was deployed to the existing Render Free service on 25 October 2026; `/health` reports sandbox/ok, existing payment balances survived the PostgreSQL migration, and GitHub CI passed 108 backend tests, 2 CSV security tests, migration checks, the frontend build and dependency audit. A real hosted Gemini image request using an explicitly labeled synthetic illustration returned inconclusive visual observations and a non-executable needs-review result. This confirms one integration path, not visual accuracy or authenticity verification. Local browser checks covered the grids, filters/exports, photo/cost form, mobile scrolling, review packet, and all four Safety Lab scenarios. All four hosted Safety Lab scenarios and hosted CSV/review-packet downloads passed; details are recorded in docs/VERIFICATION.md. The existing 2:02 video predates this revision and does not yet show these features.
 
 ## A. Claims about the competition and existing application
 
@@ -39,7 +39,7 @@ The application keeps its private merchant login, MIT license, free Render/Neon 
 | Suggestion or claim | Verdict | Decision and reason |
 | --- | --- | --- |
 | Attach a damaged-item image alongside the customer message | **Useful; implemented** | Optional JPEG/PNG upload with bounded size, normalization, authenticated retrieval, quota/storage limits, and durable database storage. No untrusted filename or remote image URL is required. |
-| Pass image and text to Gemini | **Feasible; implemented** | The configured model supports image input and structured output. The server constructs inline image input; local automated tests use controlled responses. A real deployed image-model check remains required. [Model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) |
+| Pass image and text to Gemini | **Feasible; implemented** | The configured model supports image input and structured output. The server constructs inline image input; local automated tests use controlled responses. One real hosted check passed with a synthetic illustration and an inconclusive/blocked outcome; supported and contradictory real-photo behavior is not yet measured. [Model documentation](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) |
 | Return damage/consistency fields in a validated schema | **Useful; implemented with limits** | Record visible observations and consistency, allowing inconclusive results. Deterministic blockers preserve review when evidence does not support approval. |
 | Verify the photograph is the purchased SKU or authentic receipt | **Not established by this implementation** | There is no trusted SKU reference/catalog or receipt-authentication source. A model can describe an image; it cannot prove ownership, provenance, purchase association, or authenticity. Unsupported verification language is rejected. |
 | Vision eliminates the inability to verify physical damage | **Overclaim** | The model can assess what appears visible. It cannot establish when, how, or to whose item damage occurred. Google documents hallucination limitations. [Model card](https://deepmind.google/models/model-cards/gemini-3-5-flash-lite/) |
@@ -108,9 +108,9 @@ The application keeps its private merchant login, MIT license, free Render/Neon 
 
 ## Remaining evidence before submission claims change
 
-1. Run the current automated backend/frontend checks and migrations; record actual results rather than retain an old test count as evidence for new code.
-2. Deploy the revised app, verify the PostgreSQL migration and authenticated upload/export/lab flows, and confirm the existing PayPal sandbox path still works.
-3. Use a fictional test image with the configured Gemini account. Inspect consistent, contradictory, and inconclusive outputs and confirm that blocked proposals remain non-executable. A handful of examples is not an accuracy benchmark.
+1. Current checks pass: 108 backend tests, 2 CSV tests, migrations, frontend build, and zero audit vulnerabilities. Preserve these checks when further changes are made.
+2. The revision is deployed and the hosted image/blocked-review path passed. Existing completed refund records remain available. A new end-to-end PayPal refund using an image-backed approvable proposal remains a separate acceptance check; it has not been claimed complete.
+3. An inconclusive synthetic illustration was checked with the configured Gemini account and blocked. Evaluate consistent and contradictory photo examples next; controlled-response tests cover the gates but do not establish model accuracy. A handful of examples is not an accuracy benchmark.
 4. Preserve the remaining original acceptance work, including actual webhook replay/deduplication, deployed pending-job recovery, and measured model evaluation. This revision does not silently mark those complete.
 5. Update the video and submission description only after those features work as shown. Keep the final public YouTube demonstration under three minutes and include honest judge access instructions.
 
