@@ -54,6 +54,12 @@ class Case(Base):
     status: Mapped[str] = mapped_column(String(40), default="new")
     created_at: Mapped[float] = mapped_column(Float, default=time.time)
 
+class AnalysisLease(Base):
+    __tablename__ = "analysis_leases"
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), primary_key=True)
+    token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    expires_at: Mapped[float] = mapped_column(Float, default=0)
+
 class Evidence(Base):
     __tablename__ = "case_evidence"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

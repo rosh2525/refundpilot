@@ -9,6 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
+from uuid import UUID
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from .config import settings, POLICY, POLICY_HASH
-from .db import Base, engine, Session, Payment, Case, Evidence, Proposal, Refund, Job, Webhook, Audit, Quota, as_dict, audit, uid
+from .db import Base, engine, Session, Payment, Case, AnalysisLease, Evidence, Proposal, Refund, Job, Webhook, Audit, Quota, as_dict, audit, uid
 from .policy import blockers, fingerprint
 from .approval import approve_proposal
 from .paypal import paypal, PayPalError, cents
@@ -97,6 +98,7 @@ class LoginInput(BaseModel):
 
 class CaseInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    request_id: UUID | None = None
     payment_id: str = Field(min_length=1, max_length=36)
     statement: str = Field(min_length=15, max_length=6000)
     requested_cents: int = Field(gt=0, le=1000000, strict=True)
@@ -133,10 +135,12 @@ def case_view(session, case):
     result = as_dict(case)
     proposal = session.scalar(select(Proposal).where(Proposal.case_id == case.id).order_by(Proposal.created_at.desc()).limit(1))
     payment = session.get(Payment, case.payment_id)
-    result["proposal"] = proposal_view(proposal, case, payment) if proposal else None
     operation = session.scalar(select(Refund).join(Proposal).where(Proposal.case_id == case.id))
     result["refund"] = as_dict(operation) if operation else None
     evidence = session.scalar(select(Evidence).where(Evidence.case_id == case.id))
+    result["proposal"] = proposal_view(proposal, case, payment, has_refund=bool(operation), evidence_sha256=evidence.sha256 if evidence else None) if proposal else None
+    lease = session.get(AnalysisLease, case.id)
+    result["analysis_in_progress"] = bool(lease and lease.token and lease.expires_at > time.time())
     result["evidence"] = evidence_metadata(evidence) if evidence else None
     result["evidence_replacement_required"] = not evidence and evidence_was_removed(session, case.id)
     result["return_economics"] = return_economics(case)
@@ -310,12 +314,28 @@ def create_case(body: CaseInput, _: Auth):
         payment = payment_or_404(session, body.payment_id)
         if not payment.capture_id:
             raise HTTPException(409, "Complete buyer approval and payment capture first.")
-        case = Case(payment_id=payment.id, statement=body.statement.strip(), requested_cents=body.requested_cents,
+        case = Case(id=str(body.request_id) if body.request_id else uid(), payment_id=payment.id, statement=body.statement.strip(), requested_cents=body.requested_cents,
                     return_shipping_cents=body.return_shipping_cents, restocking_cents=body.restocking_cents)
         if len(case.statement) < 15:
             raise HTTPException(422, "Provide a customer request of at least 15 characters.")
-        session.add(case)
-        session.flush()
+        existing = session.get(Case, case.id)
+        def replay(existing):
+            payment_or_404(session, existing.payment_id)
+            if any(getattr(existing, key) != getattr(case, key) for key in
+                    ("payment_id", "statement", "requested_cents", "return_shipping_cents", "restocking_cents")):
+                raise HTTPException(409, "This draft was already saved with different details. Open a new request.")
+            return case_view(session, existing)
+        if existing:
+            return replay(existing)
+        try:
+            with session.begin_nested():
+                session.add(case)
+                session.flush()
+        except IntegrityError:
+            existing = session.get(Case, case.id)
+            if not existing:
+                raise
+            return replay(existing)
         audit(session, "case_created", case.id, payment_id=payment.id, requested_cents=case.requested_cents)
         return case_view(session, case)
 
@@ -404,7 +424,7 @@ def review_packet(case_id: str, _: Auth):
                 "limitations":["Customer statements and photos are unverified claims.","Local audit records do not independently prove delivery, authenticity, or fulfillment.","No bank details, API credentials, session cookies, or image bytes are included."],
                 "payment":{key:getattr(payment,key) for key in ("id","order_id","capture_id","currency","amount_cents","refunded_cents","reserved_cents","status","captured_at")},
                 "case":as_dict(case), "current_policy":POLICY, "evidence":evidence_metadata(image) if image else None,
-                "return_economics":return_economics(case), "proposals":[proposal_view(p, case, payment) for p in proposals],
+                "return_economics":return_economics(case), "proposals":[proposal_view(p, case, payment, has_refund=bool(refunds), evidence_sha256=image.sha256 if image else None) for p in proposals],
                 "refunds":[as_dict(op) for op in refunds], "audit":[as_dict(event) for event in events], "verified_refund_notifications":webhooks}
 
 
@@ -422,6 +442,16 @@ def safety_lab_run(body: LabInput, _: Auth):
 
 @app.post("/api/cases/{case_id}/analyze")
 async def analyze_case(case_id: str, _: Auth):
+    token = uid()
+    try:
+        return await perform_analysis(case_id, token)
+    finally:
+        with Session.begin() as session:
+            session.execute(update(AnalysisLease).where(AnalysisLease.case_id == case_id,
+                AnalysisLease.token == token).values(token=None, expires_at=0))
+
+
+async def perform_analysis(case_id, token):
     with Session.begin() as session:
         case = session.get(Case, case_id)
         if not case:
@@ -432,20 +462,19 @@ async def analyze_case(case_id: str, _: Auth):
         replacement_required = not image and evidence_was_removed(session, case_id)
         if session.scalar(select(Refund.id).join(Proposal).where(Proposal.case_id == case_id)):
             raise HTTPException(409, "This case already has an approved refund operation.")
+        if not session.get(AnalysisLease, case_id):
+            try:
+                with session.begin_nested():
+                    session.add(AnalysisLease(case_id=case_id, expires_at=0))
+                    session.flush()
+            except IntegrityError:
+                pass
+        claimed = session.execute(update(AnalysisLease).where(AnalysisLease.case_id == case_id,
+            AnalysisLease.expires_at <= time.time()).values(token=token, expires_at=time.time()+90))
+        if not claimed.rowcount:
+            raise HTTPException(409, "This request is already being analyzed. Wait for its result or refresh its status.")
         if settings.gemini_api_key:
-            day = datetime.now(timezone.utc).date().isoformat()
-            key = "ai:" + day
-            quota = session.get(Quota, key)
-            if not quota:
-                try:
-                    with session.begin_nested():
-                        session.add(Quota(key=key, used=0))
-                        session.flush()
-                except IntegrityError:
-                    pass
-            changed = session.execute(update(Quota).where(Quota.key == key, Quota.used < settings.ai_daily_limit).values(used=Quota.used + 1))
-            if not changed.rowcount:
-                raise HTTPException(429, "Daily AI request allowance reached. Please retry tomorrow.")
+            consume_quota(session, "ai", settings.ai_daily_limit, "Daily AI request allowance reached. Please retry tomorrow.")
     try:
         recommendation, source = await analyze(case, payment)
     except AIUnavailable as exc:
@@ -468,6 +497,10 @@ async def analyze_case(case_id: str, _: Auth):
     if replacement_required:
         checks.append("Photo evidence was removed. Attach a replacement and analyze it before approval.")
     with Session.begin() as session:
+        owned = session.execute(update(AnalysisLease).where(AnalysisLease.case_id == case_id,
+            AnalysisLease.token == token, AnalysisLease.expires_at > time.time()).values(token=None, expires_at=0))
+        if not owned.rowcount:
+            raise HTTPException(409, "Analysis expired or was replaced. Refresh and analyze again.")
         current = session.get(Case, case_id)
         current_payment = payment_or_404(session, current.payment_id)
         current_image = session.scalar(select(Evidence).where(Evidence.case_id == case_id))

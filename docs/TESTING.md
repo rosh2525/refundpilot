@@ -9,11 +9,12 @@ alembic check
 npm --prefix frontend ci
 npm --prefix frontend run test:csv
 npm --prefix frontend run test:balances
+npm --prefix frontend run test:review
 npm --prefix frontend run build
 npm --prefix frontend audit --audit-level=high
 ```
 
-The current suite has 134 backend tests and 4 frontend checks covering CSV security and payment balances. Backend tests use isolated SQLite databases and controlled provider responses. They cover amount validation, authentication/CSRF, trusted proxy chains and independent login limits, stale and modified proposals, concurrent reservations, idempotent retries, pending/failed/unknown outcomes, missing-job recovery, webhook verification/deduplication, image normalization, evidence replacement/removal, evidence binding, upload limits, safe monetary explanations, audit environment isolation, and reversible legacy-audit classification.
+The current suite has 144 backend tests and 9 frontend checks covering CSV security, payment balances, review state, operation locks, and response handling. Backend tests use isolated SQLite databases and controlled provider responses. They cover amount validation, authentication/CSRF, trusted proxy chains and independent login limits, stale and modified proposals, concurrent reservations, idempotent retries, pending/failed/unknown outcomes, missing-job recovery, webhook verification/deduplication, image normalization, evidence replacement/removal, evidence binding, upload limits, safe monetary explanations, audit environment isolation, and reversible legacy-audit classification.
 
 The Safety lab exercises the shared approval transaction in a separate temporary SQLite database. Its fixed blocked-recommendation scenario is not a Gemini prompt-injection benchmark. Lab results do not establish PayPal or PostgreSQL integration behavior.
 

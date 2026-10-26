@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
-export function Modal({titleId,busy=false,returnFocusId,onDismiss,children}:{titleId:string;busy?:boolean;returnFocusId?:string;onDismiss:()=>void;children:ReactNode}) {
+export function Modal({titleId,busy=false,returnFocusId,panelClass='',dialogId,onDismiss,children}:{titleId:string;busy?:boolean;returnFocusId?:string;panelClass?:string;dialogId?:string;onDismiss:()=>void;children:ReactNode}) {
  const ref=useRef<HTMLDialogElement>(null);
  useLayoutEffect(()=>{
   const dialog=ref.current!;
@@ -17,7 +17,7 @@ export function Modal({titleId,busy=false,returnFocusId,onDismiss,children}:{tit
    target?.focus({preventScroll:true});
   };
  },[]);
- return <dialog ref={ref} className="modal-overlay accessible-dialog" aria-modal="true" aria-labelledby={titleId}
+ return <dialog ref={ref} id={dialogId} className={"modal-overlay accessible-dialog "+(panelClass?'drawer-dialog':'')} aria-modal="true" aria-labelledby={titleId}
   onCancel={event=>{event.preventDefault();if(!busy)onDismiss();}}
   onClick={event=>{if(event.target===event.currentTarget&&!busy)onDismiss();}}
   onKeyDown={event=>{
@@ -28,5 +28,5 @@ export function Modal({titleId,busy=false,returnFocusId,onDismiss,children}:{tit
    if(!first){event.preventDefault();ref.current?.focus();return;}
    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
-  }}><section className="modal">{children}</section></dialog>;
+  }}><section className={"modal "+panelClass}>{children}</section></dialog>;
 }

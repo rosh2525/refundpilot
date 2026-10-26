@@ -1,6 +1,8 @@
 """Merchant-facing recommendations keep monetary facts separate from model prose."""
 import re
 from .db import as_dict
+from .config import POLICY_HASH
+from .policy import blockers, fingerprint
 
 _FINANCIAL_PROSE = re.compile(
     r"\d|[$€£¥₹]|\b(?:usd|dollars?|cents?|amounts?|balances?|zero|one|two|three|four|five|six|seven|eight|nine|ten|"
@@ -21,7 +23,7 @@ def qualitative_explanation(text, decision):
     return _DECISIONS.get(decision, _DECISIONS["needs_review"]) if _FINANCIAL_PROSE.search(text) else text
 
 
-def proposal_view(proposal, case, payment):
+def proposal_view(proposal, case, payment, *, has_refund=False, evidence_sha256=None):
     result = as_dict(proposal)
     result["explanation"] = qualitative_explanation(proposal.explanation, proposal.decision)
     refundable = payment.capture_id and payment.status in {"COMPLETED", "PARTIALLY_REFUNDED"}
@@ -30,4 +32,20 @@ def proposal_view(proposal, case, payment):
         "proposed_cents": proposal.amount_cents,
         "available_now_cents": max(0, payment.amount_cents-payment.refunded_cents-payment.reserved_cents) if refundable else 0,
     }
+    issues = []
+    if proposal.state == "ready" and not has_refund:
+        if proposal.payment_version != payment.version:
+            issues.append("Payment state changed. Review the current balance and analyze again.")
+        if proposal.policy_hash != POLICY_HASH:
+            issues.append("Merchant policy changed. Analyze this request again.")
+        if proposal.evidence_sha256 != evidence_sha256:
+            issues.append("Photo evidence changed. Analyze this request again.")
+        if proposal.fingerprint != fingerprint(case.id, payment.capture_id, proposal.amount_cents,
+                proposal.payment_version, evidence_sha256=proposal.evidence_sha256):
+            issues.append("Proposal details changed. Analyze this request again.")
+        issues.extend(blockers(payment, case.requested_cents, proposal.amount_cents))
+        if issues:
+            result["state"] = "stale"
+    result["current_issues"] = issues
+    result["can_approve"] = result["state"] == "ready" and not has_refund and proposal.decision in {"refund", "preview"} and not proposal.blockers and not issues
     return result

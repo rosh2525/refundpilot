@@ -74,3 +74,5 @@ Additional authenticated APIs:
 - `POST /api/lab/run`: `{scenario}`; results of disposable approval simulations.
 
 The AG Grid Community workbench is loaded lazily on records pages. CSV exports include filtered/sorted rows and escape formula-like text. Enterprise features and external tracking/dispute writes are not part of this implementation.
+
+Per-case analysis uses a database lease before consuming AI quota. Duplicate submissions receive a conflict; a 90-second expiry allows recovery after a crash, and an ownership check prevents expired results from becoming recommendations. Dashboard projections expose current approval eligibility without rewriting historical proposals. Request creation accepts a payload-bound draft UUID for safe reconciliation after interrupted responses.
